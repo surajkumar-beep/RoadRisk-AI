@@ -1,0 +1,243 @@
+{% extends "base.html" %}
+{% block title %}Risk Analysis · RoadRisk AI{% endblock %}
+
+{% block page_title %}Risk analysis{% endblock %}
+{% block page_subtitle %}
+Descriptive risk statistics from the real dataset + model-derived feature importance. All calculations are documented below; no composite score is invented.
+{% endblock %}
+
+{% block content %}
+<div class="alert alert-info">
+  <strong>{{ data.formal.title }}:</strong>
+  <span>{{ data.formal.explanation }}</span>
+</div>
+
+{# ---- Control panel ---- #}
+<form method="get" action="{{ url_for('risk.risk') }}" class="card filter-bar" data-js-resize>
+  <div class="card-title">
+    <h3>Control panel</h3>
+    <div class="filter-actions">
+      <button type="submit" class="btn btn-primary btn-sm">Apply scope</button>
+      <a href="{{ url_for('risk.risk') }}" class="btn btn-outline btn-sm" data-js-resize>Reset</a>
+    </div>
+  </div>
+  <div class="fields filter-fields">
+    <div class="field">
+      <label for="f-scope">Records in scope</label>
+      <select id="f-scope" name="scope">
+        {% for key, label in data.scopes %}
+        <option value="{{ key }}" {% if data.scope == key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Applies to KPIs, factor separation and combinations below.</p>
+    </div>
+    <div class="field">
+      <label for="f-factor">Compare one factor in depth</label>
+      <select id="f-factor" name="_jump" onchange="if(this.value){window.location.href='{{ url_for('risk.factor') }}?factor='+encodeURIComponent(this.value);}">
+        <option value="">— choose a factor —</option>
+        {% for column, label in factors.items() %}
+        <option value="{{ column }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Opens the severity split for that factor.</p>
+    </div>
+  </div>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">▤</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ "{:,}".format(data.total) }}</strong>
+      <span>Accidents in scope</span>
+      <small>{{ data.scope_label }} ({{ "{:,}".format(data.total_full) }} total)</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico red" aria-hidden="true">⚠</div>
+    <div class="kpi-meta">
+      <strong>{{ "{:.1f}%".format(data.serious_fatal_share_pct) }}</strong>
+      <span>Serious or fatal share</span>
+      <small>within the current scope</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico red" aria-hidden="true">▲</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ "{:,}".format(data.counts["Fatal injury"]) }}</strong>
+      <span>Fatal accidents</span>
+      <small>in scope</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico amber" aria-hidden="true">!</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ "{:,}".format(data.counts["Serious Injury"]) }}</strong>
+      <span>Serious accidents</span>
+      <small>in scope</small>
+    </div>
+  </div>
+</div>
+
+{# ---- Severity comparison + correlation matrix ---- #}
+<div class="grid-12">
+  <div class="card span-5 js-plotly reveal">
+    <div class="card-title"><h3>Severity comparison</h3></div>
+    <p class="card-sub">Full-dataset outcome split (count + %) for reference, regardless of scope.</p>
+    {{ data.severity_chart_html | safe }}
+  </div>
+  <div class="card span-7 js-plotly reveal">
+    <div class="card-title"><h3>Feature relationships — correlation matrix</h3></div>
+    <p class="card-sub">
+      Pearson correlations among the model's numeric/ordinal features + hour + encoded
+      severity, computed on the scaled 165-feature matrix the model trained on.
+      Descriptive only — not causal.
+    </p>
+    {% if data.correlation_matrix %}
+      {{ data.correlation_matrix.html | safe }}
+    {% else %}
+      <div class="empty-chart"><span class="empty-icon" aria-hidden="true">▧</span>
+      <p>Correlation matrix unavailable (processed dataset missing columns).</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="section-label">Factor separation (real dataset)</div>
+<div class="card">
+  <div class="card-title"><h3>How strongly each factor separates accident outcomes</h3></div>
+  <p class="card-sub">
+    Documented calculation: for each category with n ≥ 30 records (excluding "Unknown"),
+    serious/fatal share = (Serious + Fatal) ÷ n. The "spread" is max − min in percentage
+    points across a factor's categories — a separation measure, not a probability.
+  </p>
+  {% if data.factor_table %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr>
+          <th>Factor</th>
+          <th>Categories</th>
+          <th>Risk spread</th>
+          <th>Highest-share category</th>
+          <th>Serious/Fatal share</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in data.factor_table %}
+        <tr>
+          <td><strong>{{ f.label }}</strong></td>
+          <td>{{ f.categories }}</td>
+          <td style="min-width:170px;">
+            <div class="prob-track" style="width:110px; display:inline-block; vertical-align:middle;">
+              <div class="prob-fill in" style="width:{{ f.bar_pct }}%; background:var(--info);"></div>
+            </div>
+            <span style="font-weight:700; margin-left:6px;">{{ f.spread_pct }}pp</span>
+          </td>
+          <td>{{ f.worst }}</td>
+          <td><span class="pill red">{{ f.worst_share_pct }}% serious/fatal</span></td>
+          <td><a href="{{ url_for('risk.factor', factor=f.column) }}" class="btn btn-outline btn-sm">compare →</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-chart"><span class="empty-icon" aria-hidden="true">🔍</span>
+  <p>No categories meet the n ≥ 30 threshold for this scope.</p></div>
+  {% endif %}
+</div>
+
+<div class="grid" style="margin-top:20px;">
+  <div class="card">
+    <div class="card-title"><h3>Highest-share condition combinations</h3></div>
+    <p class="card-sub">Single factor-value conditions with the largest serious/fatal share (n ≥ 30), within the current scope.</p>
+    {% if data.top_combos %}
+    <div class="table-wrap">
+      <table class="data" style="min-width:340px;">
+        <thead>
+          <tr><th>Condition</th><th>Category</th><th>n</th><th>Serious/Fatal</th><th>Fatal</th></tr>
+        </thead>
+        <tbody>
+          {% for c in data.top_combos %}
+          <tr>
+            <td>{{ c.factor | replace('_', ' ') }}</td>
+            <td><strong>{{ c.category }}</strong></td>
+            <td>{{ c.n }}</td>
+            <td><span class="pill {{ 'red' if c.serious_fatal_pct > 70 else 'amber' }}">{{ c.serious_fatal_pct }}%</span></td>
+            <td>{{ c.fatal_pct }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-chart"><span class="empty-icon" aria-hidden="true">🔍</span>
+    <p>No condition meets the n ≥ 30 threshold for this scope.</p></div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title"><h3>Numeric features vs severity</h3></div>
+    <p class="card-sub">Spearman rank correlation with encoded severity (Slight=0, Serious=1, Fatal=2).</p>
+    {% if data.correlations %}
+    <div class="table-wrap">
+      <table class="data" style="min-width:300px;">
+        <thead><tr><th>Feature</th><th>Spearman ρ</th><th>n</th></tr></thead>
+        <tbody>
+          {% for row in data.correlations %}
+          <tr>
+            <td>{{ row.feature | replace('_', ' ') }}</td>
+            <td><span class="pill {{ 'red' if row.spearman > 0.05 else 'muted' }}">{{ "+" if row.spearman > 0 else "" }}{{ row.spearman }}</span></td>
+            <td>{{ row.n }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint-note">
+      Positive ρ ⇒ more vehicles/casualties or a later hour is weakly associated with higher encoded
+      severity. Descriptive statistics, not causal claims.
+    </p>
+    {% else %}
+    <div class="empty-chart"><span class="empty-icon" aria-hidden="true">▧</span>
+    <p>Not enough records in this scope to compute correlations.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="section-label">Model view (saved XGBoost)</div>
+{% if data.importance_chart_html %}
+<div class="card js-plotly">
+  <div class="card-title"><h3>Model feature importance (gain)</h3></div>
+  <p class="card-sub">
+    Top-20 features ranked by total gain across all trees of
+    <code>models/accident_severity_model.pkl</code> — the model's own view of which
+    inputs it relies on most.
+  </p>
+  <div class="importance-layout">
+    <div>{{ data.importance_chart_html | safe }}</div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr><th>#</th><th>Feature</th><th>Gain</th></tr></thead>
+        <tbody>
+          {% for label in data.importance_labels %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td style="white-space:normal;">{{ label }}</td>
+            <td>{{ data.importance_values[loop.index0] }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% else %}
+<div class="note-box muted">
+  <span aria-hidden="true">◈</span>
+  <div><strong>Model importance unavailable.</strong> The saved model exposes no
+  <code>feature_importances_</code> attribute, so this section is omitted rather than guessed.</div>
+</div>
+{% endif %}
+{% endblock %}

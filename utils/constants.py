@@ -1,0 +1,5 @@
+APP_NAME = "RoadRisk AI"
+VERSION = "1.0.0"
+TARGET_COLUMN = "Accident_severity"
+RANDOM_STATE = 42
+TEST_SIZE = 0.2

@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% from "_macros.html" import render_form %}
+{% block title %}Explainability · RoadRisk AI{% endblock %}
+
+{% block page_title %}Explainability (SHAP){% endblock %}
+{% block page_subtitle %}
+Genuine SHAP (TreeExplainer) attributions from the saved XGBoost model — exactly the same preprocessing pipeline that serves the prediction page.
+{% endblock %}
+
+{% block head_actions %}
+{% if ready %}
+<a href="{{ url_for('xai.explain', sample=1) }}" class="btn btn-outline btn-sm">🎲 Explain a random sample</a>
+{% endif %}
+{% endblock %}
+
+{% macro local_explanation(explanation, via) %}
+<div class="result-hero reveal in">
+  <div class="result-grid">
+    <div>
+      <span class="sev-indicator sev-{{ explanation.prediction_tone }}">
+        SHAP local explanation · {{ via }}
+      </span>
+      <div class="big">{{ explanation.prediction }}</div>
+      <p class="result-note">
+        Base value (predicted-class log-odds): <strong>{{ explanation.base_value }}</strong>
+        → output log-odds: <strong>{{ explanation.output_logit }}</strong>
+      </p>
+    </div>
+    <div class="result-ring">
+      <div class="conf-ring sev-ring-{{ explanation.prediction_tone }}" data-pct="{{ explanation.confidence_pct }}">
+        <div class="label">{{ explanation.confidence_pct }}%</div>
+      </div>
+      <div class="ring-caption">model confidence</div>
+    </div>
+  </div>
+
+  <div class="section-label tight">Class probabilities</div>
+  {% for item in explanation.probabilities %}
+  <div class="prob-bar">
+    <span class="p-label">{{ item.label }}</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ item.pct }}"
+           style="background: {% if loop.index == 1 %}var(--sev-slight){% elif loop.index == 2 %}var(--sev-serious){% else %}var(--sev-fatal){% endif %};"></div>
+    </div>
+    <span class="prob-pct">{{ item.pct }}%</span>
+  </div>
+  {% endfor %}
+
+  <div class="alert {{ 'alert-success' if explanation.consistency.matches else 'alert-warn' }}" style="margin:16px 0 0;">
+    <strong>Consistency check:</strong>
+    <span>{{ explanation.consistency.note }}</span>
+  </div>
+</div>
+
+<div class="note-box muted" role="note">
+  <span aria-hidden="true">ℹ</span>
+  <div>
+    <strong>Interpretation:</strong> SHAP values describe how each input moved
+    <em>this model's output</em> for <em>this record</em> — they are attributions, not
+    causal proof. Changing a value elsewhere in the real world would not necessarily
+    change the outcome.
+  </div>
+</div>
+
+<div class="grid-12" style="margin-top:4px;">
+  <div class="card span-7 js-plotly reveal">
+    <div class="card-title"><h3>SHAP waterfall (individual prediction)</h3></div>
+    <p class="card-sub">
+      Log-odds contributions for the predicted class. Green pushes <em>toward</em> the
+      prediction, grey away from it. Top {{ explanation.local | length }} non-zero features.
+    </p>
+    {{ explanation.waterfall_html | safe }}
+  </div>
+  <div class="card span-5 js-plotly reveal">
+    <div class="card-title"><h3>Force-style contribution chain</h3></div>
+    <p class="card-sub">
+      Base log-odds → per-feature contributions → output log-odds (real SHAP values
+      rendered with Plotly; the bundled SHAP JS force plot is not used so the app stays offline).
+    </p>
+    {{ explanation.force_html | safe }}
+  </div>
+</div>
+
+<div class="grid" style="margin-top:4px;">
+  <div class="card">
+    <div class="card-title"><h3>Top factors increasing this prediction</h3></div>
+    <p class="card-sub">Positive SHAP contributions for the predicted class.</p>
+    {% if explanation.increasing %}
+    <ul class="factor-list">
+      {% for item in explanation.increasing %}
+      <li>
+        <span class="factor-name">{{ item.label }}</span>
+        <span class="pill">+{{ item.contribution }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-chart" style="padding:24px;"><p>No positive contributions for this record.</p></div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="card-title"><h3>Top factors decreasing this prediction</h3></div>
+    <p class="card-sub">Negative SHAP contributions for the predicted class.</p>
+    {% if explanation.decreasing %}
+    <ul class="factor-list">
+      {% for item in explanation.decreasing %}
+      <li>
+        <span class="factor-name">{{ item.label }}</span>
+        <span class="pill muted">{{ item.contribution }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="empty-chart" style="padding:24px;"><p>No negative contributions for this record.</p></div>
+    {% endif %}
+  </div>
+  <div class="card">
+    <div class="card-title"><h3>All top contributors</h3></div>
+    <p class="card-sub">Sorted by absolute contribution (log-odds).</p>
+    <div class="table-wrap">
+      <table class="data" style="min-width:320px;">
+        <thead><tr><th>Feature</th><th>Contribution</th><th>Effect</th></tr></thead>
+        <tbody>
+          {% for item in explanation.local %}
+          <tr>
+            <td style="white-space:normal;"><strong>{{ item.label }}</strong></td>
+            <td class="contrib">{{ "+" if item.contribution > 0 else "" }}{{ item.contribution }}</td>
+            <td><span class="pill {{ '' if item.contribution > 0 else 'muted' }}" style="white-space:normal;">{{ item.direction }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+{% if load_error %}
+<div class="pending-panel">
+  <span class="pending-icon" aria-hidden="true">◈</span>
+  <div>
+    <h3>Explainability integration pending</h3>
+    <p>
+      SHAP is integrated with the saved XGBoost model, but the model artifacts are not
+      available on this server right now, so no explanation can be produced.
+    </p>
+    <p class="muted-small">Detail: {{ load_error }}</p>
+  </div>
+</div>
+{% else %}
+  {% if explainability_error %}
+  <div class="pending-panel">
+    <span class="pending-icon" aria-hidden="true">◈</span>
+    <div>
+      <h3>Explainability unavailable</h3>
+      <p>{{ explainability_error }}</p>
+      <p class="muted-small">
+        Predictions and every other page are unaffected — only the SHAP explanations
+        cannot be produced right now.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+  {% if errors %}
+  <div class="alert alert-danger">
+    <strong>Cannot build an explanation:</strong>
+    <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+  </div>
+  {% endif %}
+
+  {% if explanation %}
+    {{ local_explanation(explanation, via) }}
+  {% elif not explainability_error %}
+  <div class="note-box">
+    <span aria-hidden="true">✦</span>
+    <div>
+      <strong>No local explanation yet.</strong> Submit a record below, use the 🎲 random-sample
+      button in the header, or run a prediction first — the last predicted record is reused
+      automatically.
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="section-label">Explain your own record</div>
+  <form method="post" action="{{ url_for('xai.explain') }}" class="form-card" style="margin-bottom:24px;">
+    {{ render_form(form, submitted, submit_label='Explain this record with SHAP') }}
+  </form>
+
+  <div class="section-label">SHAP summary — global feature importance</div>
+  {% if global_error %}
+  <div class="alert alert-warn"><strong>Global view unavailable.</strong><span>{{ global_error }}</span></div>
+  {% elif global_view %}
+  <div class="card js-plotly reveal">
+    <div class="card-title"><h3>Mean |SHAP| by original column</h3></div>
+    <p class="card-sub">
+      Global importance: average absolute Shapley value over a fixed deterministic sample of
+      <strong>{{ global_view.sample_size }}</strong> real records (one-hot columns grouped under
+      their raw column). Recomputed once per server process.
+    </p>
+    <div class="importance-layout">
+      <div>{{ global_view.chart_html | safe }}</div>
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>#</th><th>Column</th><th>Mean |SHAP|</th></tr></thead>
+          <tbody>
+            {% for item in global_view.by_group %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td style="white-space:normal;">{{ item.label }}</td>
+              <td><strong>{{ item.mean_abs }}</strong></td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

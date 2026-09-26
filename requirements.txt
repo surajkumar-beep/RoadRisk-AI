@@ -1,0 +1,14 @@
+# RoadRisk AI - Flask deployment: prediction (STEP 7) + explainability (STEP 13)
+# Runtime requirements for app.py, pinned to the versions installed in this project.
+Flask==3.1.3
+pandas==3.0.5
+numpy==2.4.6
+scikit-learn==1.9.0
+xgboost==3.3.0
+joblib==1.5.3
+# SHAP explainability (STEP 13). services/explainability_service.py adds a
+# sanitised-booster fallback so older SHAP releases that cannot parse the
+# XGBoost 3.x vector base_score still work.
+shap==0.52.0
+# Imported transitively by testing/test_model.py (Step 6 helpers reused by app.py)
+matplotlib==3.11.1

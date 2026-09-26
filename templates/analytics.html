@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Analytics · RoadRisk AI{% endblock %}
+
+{% block page_title %}Accident analytics{% endblock %}
+{% block page_subtitle %}
+Filter the dataset — KPIs and every chart update together. Reset restores the full 12,316 records. (Year is unavailable: the dataset has clock times only, no date column.)
+{% endblock %}
+
+{% block content %}
+<form method="get" action="{{ url_for('analytics.analytics') }}" class="card filter-bar" data-js-resize>
+  <div class="card-title">
+    <h3>Filters</h3>
+    <div class="filter-actions">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+      <a href="{{ url_for('analytics.analytics') }}" class="btn btn-outline btn-sm" data-js-resize>Reset</a>
+    </div>
+  </div>
+  <div class="fields filter-fields">
+    {% for f in filter_bar %}
+    <div class="field">
+      <label for="f-{{ f.key }}">{{ f.label }}</label>
+      <select id="f-{{ f.key }}" name="{{ f.key }}">
+        <option value="">All</option>
+        {% for value in f.options %}
+        <option value="{{ value }}" {% if applied.get(f.key) == value %}selected{% endif %}>{{ value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endfor %}
+  </div>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">▤</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ "{:,}".format(data.summary.records) }}</strong>
+      <span>Records after filter</span>
+      <small>{{ data.summary.share_pct }}% of the full dataset</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">⌖</div>
+    <div class="kpi-meta">
+      <strong>{{ data.summary.top_area }}</strong>
+      <span>Most frequent area</span>
+      <small>within the current filter</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">☾</div>
+    <div class="kpi-meta">
+      <strong>{{ data.summary.busiest_day }}</strong>
+      <span>Busiest weekday</span>
+      <small>by number of accidents</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">◷</div>
+    <div class="kpi-meta">
+      <strong>{{ data.summary.peak_hour }}</strong>
+      <span>Peak accident hour</span>
+      <small>24h clock</small>
+    </div>
+  </div>
+</div>
+
+{% if data.empty %}
+<div class="alert alert-warn">
+  <div class="empty-chart" style="border:0; padding:24px;">
+    <span class="empty-icon" aria-hidden="true">🔍</span>
+    <p>No records match the current filter combination. Try widening the filters or
+    <a href="{{ url_for('analytics.analytics') }}">resetting them</a>.</p>
+  </div>
+</div>
+{% else %}
+<div class="grid-12">
+  {% for chart in data.charts %}
+  <div class="card span-{{ chart.span }} reveal js-plotly">
+    <div class="card-title"><h3>{{ chart.title }}</h3></div>
+    <p class="card-sub">{{ chart.subtitle }}</p>
+    {{ chart.html | safe }}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

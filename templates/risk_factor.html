@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block title %}Factor comparison · Risk analysis · RoadRisk AI{% endblock %}
+
+{% block page_title %}Factor comparison — {{ data.factor_label | replace('_', ' ') }}{% endblock %}
+{% block page_subtitle %}
+100% stacked severity split across the categories actually observed in the dataset (n ≥ 30).
+{% endblock %}
+
+{% block head_actions %}
+<form method="get" action="{{ url_for('risk.factor') }}" style="display:flex; gap:8px;">
+  <select name="factor" onchange="this.form.submit()" class="btn btn-outline" style="padding:8px 12px;">
+    {% for column, label in factors.items() %}
+    <option value="{{ column }}" {% if column == active_factor %}selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+</form>
+{% endblock %}
+
+{% block content %}
+{% if data.empty %}
+<div class="alert alert-warn">No category for this factor has at least 30 records.</div>
+{% else %}
+<div class="grid-12">
+  <div class="card span-6 js-plotly">
+    <div class="card-title"><h3>Severity composition</h3></div>
+    <p class="card-sub">100% stacked bars - each category adds to exactly 100%.</p>
+    {{ data.chart | safe }}
+  </div>
+  <div class="card span-6">
+    <div class="card-title"><h3>Per-category breakdown</h3></div>
+    <p class="card-sub">Shares in %; n = records with this category value.</p>
+    <div class="table-wrap">
+      <table class="data">
+        <thead>
+          <tr><th>Category</th><th>n</th><th>Slight</th><th>Serious</th><th>Fatal</th></tr>
+        </thead>
+        <tbody>
+          {% for row in data.table %}
+          <tr>
+            <td><strong>{{ row.value }}</strong></td>
+            <td>{{ row.n }}</td>
+            <td>{{ row.slight_pct }}%</td>
+            <td class="{{ 'pill amber' if row.serious_pct > 40 else '' }}" style="padding:0; font-weight:600;">{{ row.serious_pct }}%</td>
+            <td><span class="pill {{ 'red' if row.fatal_pct > 10 else 'muted' }}">{{ row.fatal_pct }}%</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="alert alert-info" style="margin-top:20px;">
+  Read this as a <strong>descriptive comparison</strong>, not causation: the dataset has no causal
+  graph, and categories like “Unknown” are included only when they meet the n ≥ 30 threshold.
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Home · RoadRisk AI{% endblock %}
+
+{% block page_title %}Road safety dashboard{% endblock %}
+{% block page_subtitle %}
+Every figure below is a real count from the cleaned 12,316-row dataset (same cleaning rules the model saw). No estimated or unsupported metrics are shown.
+{% endblock %}
+
+{% block head_actions %}
+<a href="{{ url_for('predict.predict') }}" class="btn btn-primary btn-sm">+ New prediction</a>
+{% endblock %}
+
+{% block content %}
+<div class="kpi-grid">
+  {% for kpi in data.kpis %}
+  <div class="kpi reveal" data-testid="kpi-{{ loop.index }}">
+    <div class="kpi-ico {{ kpi.tone }}" aria-hidden="true">{{ kpi.icon }}</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ kpi.value }}</strong>
+      <span>{{ kpi.label }}</span>
+      <small>{{ kpi.sub }}</small>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="grid-12">
+  {% for chart in data.charts %}
+  <div class="card span-{{ chart.span }} reveal js-plotly">
+    <div class="card-title">
+      <h3>{{ chart.title }}</h3>
+    </div>
+    <p class="card-sub">{{ chart.subtitle }}</p>
+    {{ chart.html | safe }}
+  </div>
+  {% endfor %}
+</div>
+
+<p class="footer-note">
+  Source: RTA road-accident dataset · all charts rendered server-side with Plotly.
+</p>
+{% endblock %}

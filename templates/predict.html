@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% from "_macros.html" import render_form %}
+{% block title %}Accident Severity Prediction · RoadRisk AI{% endblock %}
+
+{% block page_title %}Accident Severity Prediction{% endblock %}
+{% block page_subtitle %}
+The trained RoadRisk AI model (XGBoost, 30 approved input features) predicts whether a new accident record is Slight, Serious or Fatal — using the exact preprocessing chain the model was trained with.
+{% endblock %}
+
+{% macro result_hero(result) %}
+<div class="result-hero reveal in">
+  <div class="result-grid">
+    <div>
+      <span class="sev-indicator sev-{{ result.prediction_tone }}">
+        Predicted severity · {{ result.prediction }}
+      </span>
+      <div class="big">{{ result.prediction }}</div>
+      <p class="result-note">
+        Scored with {{ result.model }} · class probability rounded to 2 decimals
+        (probability of each severity class — not a "risk percentage").
+      </p>
+    </div>
+    <div class="result-ring">
+      <div class="conf-ring sev-ring-{{ result.prediction_tone }}" data-pct="{{ result.confidence_pct }}">
+        <div class="label">{{ result.confidence_pct }}%</div>
+      </div>
+      <div class="ring-caption">confidence (highest class probability)</div>
+    </div>
+  </div>
+
+  <div class="section-label tight">Class probabilities</div>
+  {% for item in result.probabilities %}
+  <div class="prob-bar">
+    <span class="p-label">{{ item.label }}</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ item.pct }}"
+           style="background: {% if loop.index == 1 %}var(--sev-slight){% elif loop.index == 2 %}var(--sev-serious){% else %}var(--sev-fatal){% endif %};"></div>
+    </div>
+    <span class="prob-pct">{{ item.pct }}%</span>
+  </div>
+  {% endfor %}
+
+  <div class="result-actions">
+    <a href="{{ url_for('xai.explain') }}" class="btn btn-primary btn-sm">Explain this record with SHAP →</a>
+    <button type="button" class="btn btn-outline btn-sm"
+            onclick="document.getElementById('predict-form').scrollIntoView({behavior:'smooth'});">Edit record</button>
+  </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+{% if load_error %}
+<div class="alert alert-warn"><strong>Model not available.</strong><span>{{ load_error }}</span></div>
+{% endif %}
+{% if errors %}
+<div class="alert alert-danger">
+  <strong>Please fix the following:</strong>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+{% if result %}{{ result_hero(result) }}{% endif %}
+
+<form method="post" action="{{ url_for('predict.predict') }}" id="predict-form" class="form-card">
+  {{ render_form(form, submitted) }}
+</form>
+{% endblock %}

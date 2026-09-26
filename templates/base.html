@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="RoadRisk AI - accident severity prediction and road-safety analytics">
+  <title>{% block title %}RoadRisk AI{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  {% block head %}{% endblock %}
+  <style>
+    /* Per-chart divs can exceed 100%; page grids want full-bleed cards. */
+    .plotly-graph-div { width: 100% !important; }
+  </style>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+
+  {% if user %}
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark">▲</span>
+        <div>
+          <strong>RoadRisk</strong>
+          <small>AI safety analytics</small>
+        </div>
+      </div>
+      <nav class="nav" aria-label="Main navigation">
+        <a href="{{ url_for('dashboard.home') }}" class="nav-item {{ 'is-active' if active_page == 'dashboard' else '' }}">
+          <span class="nav-ico">▦</span> Home
+        </a>
+        <a href="{{ url_for('predict.predict') }}" class="nav-item {{ 'is-active' if active_page == 'predict' else '' }}">
+          <span class="nav-ico">⌗</span> Prediction
+        </a>
+        <a href="{{ url_for('analytics.analytics') }}" class="nav-item {{ 'is-active' if active_page == 'analytics' else '' }}">
+          <span class="nav-ico">◫</span> Analytics
+        </a>
+        <a href="{{ url_for('risk.risk') }}" class="nav-item {{ 'is-active' if active_page == 'risk' else '' }}">
+          <span class="nav-ico">⚠</span> Risk Analysis
+        </a>
+        <a href="{{ url_for('hotspot.hotspots') }}" class="nav-item {{ 'is-active' if active_page == 'hotspots' else '' }}">
+          <span class="nav-ico">⌖</span> Hotspots
+        </a>
+        <a href="{{ url_for('xai.explain') }}" class="nav-item {{ 'is-active' if active_page == 'xai' else '' }}">
+          <span class="nav-ico">◈</span> Explainability
+        </a>
+        <a href="{{ url_for('auth.logout') }}" class="nav-item nav-logout">
+          <span class="nav-ico">⏻</span> Logout
+        </a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="user-chip">
+          <span class="avatar">{{ (user.name or 'U')[0]|upper }}</span>
+          <span class="u-meta">
+            <strong>{{ user.name }}</strong>
+            <small>{{ user.email }}</small>
+          </span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main page-in">
+      <header class="page-head">
+        <div>
+          <h1>{% block page_title %}{% endblock %}</h1>
+          <p class="page-sub">{% block page_subtitle %}{% endblock %}</p>
+        </div>
+        <div class="head-side">{% block head_actions %}{% endblock %}</div>
+      </header>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="flash-stack">
+          {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  {% else %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+      <div class="flash-stack flash-stack-top">
+        {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    {% endwith %}
+    {% block public_content %}{% endblock %}
+  {% endif %}
+
+  <script src="{{ url_for('static', filename='vendor/plotly.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

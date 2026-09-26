@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Hotspot mapping · RoadRisk AI{% endblock %}
+
+{% block page_title %}Hotspot mapping{% endblock %}
+{% block page_subtitle %}
+Areas ranked by real accident volume. Coordinates are not part of this dataset, so area is the finest spatial grain available.
+{% endblock %}
+
+{% block content %}
+<div class="note-box" role="note">
+  <span style="font-size:16px;">ℹ</span>
+  <div><strong>One honest limitation:</strong> {{ data.not_in_dataset }}</div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi reveal">
+    <div class="kpi-ico">▤</div>
+    <div class="kpi-meta">
+      <strong>{{ "{:,}".format(data.total) }}</strong>
+      <span>Accidents mapped</span>
+      <small>full cleaned dataset</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico">⌖</div>
+    <div class="kpi-meta">
+      <strong>{{ data.area_cards[0].name }}</strong>
+      <span>Busiest area</span>
+      <small>{{ data.area_cards[0].count }} accidents ({{ data.area_cards[0].share_pct }}%)</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico red">☠</div>
+    <div class="kpi-meta">
+      <strong>{{ data.area_cards[0].fatal_pct }}%</strong>
+      <span>Fatal share in busiest area</span>
+      <small>of that area's accidents</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico">◷</div>
+    <div class="kpi-meta">
+      <strong>{{ data.max_areas }}</strong>
+      <span>Areas shown</span>
+      <small>top-ranked by volume</small>
+    </div>
+  </div>
+</div>
+
+<div class="section-label">Top areas</div>
+<div class="grid">
+  {% for area in data.area_cards %}
+  <div class="card reveal" style="padding:16px;">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <span class="rank-badge">{{ area.rank }}</span>
+      <div style="flex:1;">
+        <strong style="font-size:15px;">{{ area.name }}</strong>
+        <div style="font-size:12.5px; color:var(--muted);">{{ area.count }} accidents · {{ area.share_pct }}% of total</div>
+      </div>
+      <span class="pill {{ 'red' if area.fatal_pct > 15 else 'amber' }}">↑ {{ area.serious_pct }}%</span>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px; font-size:11.5px; color:var(--muted);">
+      <span>Fatal <strong>{{ area.fatal_pct }}%</strong></span>
+      <span>Serious <strong>{{ area.serious_pct }}%</strong></span>
+      <span>Slight <strong>{{ area.sight_pct }}%</strong></span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="section-label">Density &amp; road geometry</div>
+<div class="grid-12">
+  {% for chart in data.charts %}
+  <div class="card span-{{ chart.span }} reveal js-plotly">
+    <div class="card-title"><h3>{{ chart.title }}</h3></div>
+    <p class="card-sub">{{ chart.subtitle }}</p>
+    {{ chart.html | safe }}
+  </div>
+  {% endfor %}
+</div>
+{% endblock %}

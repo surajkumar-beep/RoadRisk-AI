@@ -1,0 +1,44 @@
+{# Shared accident-record form (used by the prediction page and the XAI page). #}
+{% macro render_form(form, submitted, submit_label='Run severity prediction') %}
+  {% for group in form %}
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">
+      <span class="ico" aria-hidden="true">{{ group.icon }}</span>
+      <span class="legend-text">
+        <span class="legend-title">{{ group.title }}</span>
+        {% if group.description %}
+        <span class="legend-desc">{{ group.description }}</span>
+        {% endif %}
+      </span>
+    </legend>
+    <div class="fields">
+      {% for field in group.fields %}
+      <div class="field">
+        <label for="f-{{ field.name }}">{{ field.label }}</label>
+        {% if field.widget == 'time' %}
+          <input type="time" id="f-{{ field.name }}" name="{{ field.name }}"
+                 value="{{ submitted.get(field.name, '') }}" required>
+          <p class="hint">24-hour clock, e.g. 08:45</p>
+        {% elif field.widget == 'number' %}
+          <input type="number" id="f-{{ field.name }}" name="{{ field.name }}"
+                 value="{{ submitted.get(field.name, '') }}"
+                 min="{{ field.min }}" max="{{ field.max }}" step="1" required>
+          <p class="hint">whole number ({{ field.min }}–{{ field.max }})</p>
+        {% else %}
+          <select id="f-{{ field.name }}" name="{{ field.name }}" required>
+            <option value="">— select —</option>
+            {% for option in field.options %}
+            <option value="{{ option }}" {% if submitted.get(field.name) == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% endfor %}
+  <div class="form-actions">
+    <button type="submit" class="btn btn-primary">{{ submit_label }}</button>
+    <button type="reset" class="btn btn-outline">Reset form</button>
+  </div>
+{% endmacro %}
