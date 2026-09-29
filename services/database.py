@@ -7,9 +7,15 @@ var so tests / other environments can use an isolated file).
 
 Schema is created idempotently via :func:`init_db` (called once on app start).
 
+RBAC (role-based access control): every user row carries a ``role`` column
+(``'user'`` by default, ``'admin'`` for administrators).  Databases created
+before RBAC existed are migrated in place by :func:`_migrate` - the column is
+added with a DEFAULT so existing users are preserved and keep working as
+regular users.
+
 Only the users table is persisted today; it exists solely so the built-in
 session authentication keeps working without extra dependencies such as
-flask-login.
+flask-login.  All statements are parameterised (SQL injection safe).
 """
 import os
 import sqlite3
@@ -23,7 +29,8 @@ CREATE TABLE IF NOT EXISTS users (
     name          TEXT    NOT NULL,
     email         TEXT    NOT NULL UNIQUE,
     password_hash TEXT    NOT NULL,
-    created_at    TEXT    NOT NULL
+    created_at    TEXT    NOT NULL,
+    role          TEXT    NOT NULL DEFAULT 'user'
 );
 """
 
@@ -36,11 +43,29 @@ def get_connection():
     return conn
 
 
+def _migrate(conn):
+    """Bring an existing database up to the current schema.
+
+    * Pre-RBAC databases (no ``role`` column) get ``ADD COLUMN role TEXT NOT
+      NULL DEFAULT 'user'`` - existing rows keep their accounts and are
+      treated as regular users.  Safe to run repeatedly.
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    if columns and "role" not in columns:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'"
+        )
+
+
 def init_db():
-    """Create (if missing) all tables. Safe to call on every startup."""
+    """Create (if missing) all tables and apply pending migrations.
+
+    Safe to call on every startup.
+    """
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
     finally:
         conn.close()

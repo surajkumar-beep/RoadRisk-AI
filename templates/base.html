@@ -46,6 +46,11 @@
         <a href="{{ url_for('xai.explain') }}" class="nav-item {{ 'is-active' if active_page == 'xai' else '' }}">
           <span class="nav-ico">◈</span> Explainability
         </a>
+        {% if user and user['role'] == 'admin' %}
+        <a href="{{ url_for('admin.admin') }}" class="nav-item {{ 'is-active' if active_page == 'admin' else '' }}">
+          <span class="nav-ico">⚙</span> Admin
+        </a>
+        {% endif %}
         <a href="{{ url_for('auth.logout') }}" class="nav-item nav-logout">
           <span class="nav-ico">⏻</span> Logout
         </a>
@@ -55,7 +60,7 @@
           <span class="avatar">{{ (user.name or 'U')[0]|upper }}</span>
           <span class="u-meta">
             <strong>{{ user.name }}</strong>
-            <small>{{ user.email }}</small>
+            <small>{{ user.email }}{% if user['role'] == 'admin' %} · admin{% endif %}</small>
           </span>
         </div>
       </div>

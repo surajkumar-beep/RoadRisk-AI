@@ -1,14 +1,27 @@
-# RoadRisk AI - Flask deployment: prediction (STEP 7) + explainability (STEP 13)
-# Runtime requirements for app.py, pinned to the versions installed in this project.
+# RoadRisk AI - runtime requirements for app.py and the ML pipeline.
+# Pinned to the versions this project is developed and tested against.
+
+# Web framework / configuration
 Flask==3.1.3
+python-dotenv==1.2.3   # loads .env (config.py); real environment variables win
+gunicorn==26.2.0       # production WSGI server (Linux/Docker; see README)
+
+# Data / ML stack (matches the saved models/*.pkl artifacts - see README)
 pandas==3.0.5
 numpy==2.4.6
 scikit-learn==1.9.0
 xgboost==3.3.0
 joblib==1.5.3
+
 # SHAP explainability (STEP 13). services/explainability_service.py adds a
 # sanitised-booster fallback so older SHAP releases that cannot parse the
 # XGBoost 3.x vector base_score still work.
 shap==0.52.0
+
+# Visualisation (dashboard/analytics/hotspot charts are server-rendered Plotly)
+plotly==6.9.0
 # Imported transitively by testing/test_model.py (Step 6 helpers reused by app.py)
 matplotlib==3.11.1
+
+# Tests (CI runs `pytest`; the suite also runs via `python -m unittest`)
+pytest==8.4.2

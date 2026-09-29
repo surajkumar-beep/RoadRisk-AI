@@ -19,9 +19,32 @@ Documented calculations (every number is descriptive, from the real dataset):
 
   4. MODEL IMPORTANCE - XGBoost gain (model.feature_importances_), real.
 
-  5. COMPOSITE RISK INDICATOR - NOT defined anywhere in this project; the UI
-     reports it as "pending definition" instead of inventing one. Class
-     probabilities from the model are never relabelled as "risk %".
+  5. COMPOSITE RISK SCORE - defined by this project (documented, deterministic):
+
+         score = 100 x (0.6 x p_severe + 0.4 x f_severe)
+
+     * p_severe = saved XGBoost model P(Serious Injury) + P(Fatal injury)
+                  for the record (0..1) - the *predicted severity
+                  probability*, never relabelled as "risk %";
+     * f_severe = mean OBSERVED serious/fatal share in the real dataset for
+                  each of the record's factor categories (FACTOR_COLUMNS,
+                  categories with n >= 30, "Unknown" excluded; when nothing
+                  qualifies the full-dataset severe share is used as a
+                  documented baseline);
+     * range    = 0..100 (1 decimal); bands: Low < 25, Moderate 25-49.9,
+                  High 50-74.9, Severe >= 75 (interpretation labels only).
+
+     The score blends model evidence and dataset evidence with fixed weights.
+     It is NOT a probability, NOT a SHAP value and NOT the predicted class.
+     Same inputs always give the same output (reproducible).  Limitations:
+     descriptive (weights are fixed, not fitted), the factor component only
+     covers the 9 factor columns available on the form, and categories with
+     n < 30 are skipped by design.
+
+  The three model-derived quantities are kept distinct in the UI:
+    * predicted severity probability (class probabilities on /predict),
+    * composite risk score (formula above),
+    * model feature importance / SHAP attribution (what drove the model).
 
 Control panel scope filter (applies to 1 + 2 + KPI cards):
   all    -> every record
@@ -32,7 +55,7 @@ import pandas as pd
 
 from utils import plots
 from services.data import load_processed_dataset, load_raw_dataset, severity_counts
-from services.prediction_service import get_artifacts
+from services.prediction_service import get_artifacts, make_prediction
 
 # Factor columns offered in the "severity by factor" comparison, in UI order.
 FACTOR_COLUMNS = [
@@ -68,18 +91,40 @@ SCOPES = {
     "fatal": ("Fatal only", ["Fatal injury"]),
 }
 
+# ---------------------------------------------------------------------------
+# Composite risk score (documented formula - see module docstring item 5)
+# ---------------------------------------------------------------------------
+SCORE_FORMULA = "score = 100 x (0.6 x p_severe + 0.4 x f_severe)"
+SCORE_MODEL_WEIGHT = 0.6      # weight of the model's severe-outcome probability
+SCORE_FACTOR_WEIGHT = 0.4      # weight of the dataset-observed factor shares
+SCORE_MIN_N = 30               # minimum records for a factor category to count
+SCORE_SEVERE_LABELS = ("Serious Injury", "Fatal injury")
+# Interpretation bands (labels only - the score itself is NOT a probability).
+SCORE_BANDS = (
+    (75.0, "Severe"),
+    (50.0, "High"),
+    (25.0, "Moderate"),
+    (0.0, "Low"),
+)
+
+# Lazily built cache: (column, category) -> (n, severe_share) plus the
+# full-dataset baseline severe share. Computed once per process from the real
+# cleaned dataset, so identical inputs always produce identical scores.
+_FACTOR_SHARE_CACHE = None
+
 FORMAL_SCORE_STATE = {
-    "status": "pending",
-    "title": "Composite risk indicator",
+    "status": "defined",
+    "title": "Composite risk score",
+    "formula": SCORE_FORMULA,
     "explanation": (
-        "No composite risk score is defined for this project: there is no "
-        "documented formula that collapses all 30 accident fields into one "
-        "number, so inventing one would be misleading. This page therefore "
-        "reports descriptive statistics only - factor separation (percentage "
-        "points between the highest and lowest serious/fatal share), "
-        "correlations from the model's own feature matrix, and the model's "
-        "gain-based feature importance. Model class probabilities on the "
-        "prediction page are class probabilities, NOT 'risk percentages'."
+        "The composite risk score is now defined: "
+        "score = 100 x (0.6 x p_severe + 0.4 x f_severe), where p_severe is "
+        "the saved model's probability of Serious/Fatal for the record and "
+        "f_severe is the observed serious/fatal share of the record's factor "
+        "categories in the real dataset (n >= 30). Range 0-100; Low < 25, "
+        "Moderate 25-49.9, High 50-74.9, Severe >= 75. It is a transparent "
+        "index, NOT a probability and NOT a SHAP value - class probabilities "
+        "on the prediction page remain class probabilities."
     ),
 }
 
@@ -90,6 +135,190 @@ def _apply_scope(df, scope):
     if subset is None:
         return df
     return df[df["Accident_severity"].isin(subset)]
+
+
+# ---------------------------------------------------------------------------
+# Composite risk score - implementation of the documented formula
+# ---------------------------------------------------------------------------
+
+
+def score_band(score):
+    """Interpretation label for a composite score value ('Low'..'Severe')."""
+    try:
+        value = float(score)
+    except (TypeError, ValueError):
+        return "Low"
+    for threshold, label in SCORE_BANDS:
+        if value >= threshold:
+            return label
+    return "Low"
+
+
+def _factor_shares():
+    """Build (once per process) the factor-category severe-share cache.
+
+    Returns ``({(column, category): (n, severe_share)}, baseline_share)``
+    where ``severe_share`` is the observed
+    ``(Serious Injury + Fatal injury) / n`` in the real cleaned dataset for
+    categories with ``n >= SCORE_MIN_N`` (``"Unknown"`` excluded), and
+    ``baseline_share`` is the same ratio over the full dataset (documented
+    fallback when a record matches no usable factor category).
+    """
+    global _FACTOR_SHARE_CACHE
+    if _FACTOR_SHARE_CACHE is None:
+        df = load_raw_dataset()
+        cache = {}
+        for column, _label in FACTOR_COLUMNS:
+            if column not in df.columns:
+                continue
+            for value, grp in df.groupby(column)["Accident_severity"]:
+                if value == "Unknown":
+                    continue
+                n = int(len(grp))
+                if n < SCORE_MIN_N:
+                    continue
+                severe = int(grp.isin(SCORE_SEVERE_LABELS).sum())
+                cache[(column, str(value))] = (n, severe / n)
+        total = int(len(df))
+        severe_total = int(df["Accident_severity"].isin(SCORE_SEVERE_LABELS).sum())
+        baseline = (severe_total / total) if total else 0.0
+        _FACTOR_SHARE_CACHE = (cache, baseline)
+    return _FACTOR_SHARE_CACHE
+
+
+def factor_severe_share(record):
+    """Dataset-evidence component for one record.
+
+    Returns ``(f_severe, used, skipped, baseline_used)``:
+
+    * ``f_severe``  - mean observed serious/fatal share across the record's
+      factor categories (FACTOR_COLUMNS, n >= 30, "Unknown" excluded);
+    * ``used``      - list of ``{label, value, n, severe_share_pct, share}``;
+    * ``skipped``   - list of ``{label, value, reason}`` for factors that did
+      not contribute (missing value, unknown category, or n < 30);
+    * ``baseline_used`` - True when nothing qualified and the full-dataset
+      severe share (documented baseline) was used instead.
+    """
+    shares, baseline = _factor_shares()
+    used, skipped = [], []
+    for column, label in FACTOR_COLUMNS:
+        value = record.get(column) if isinstance(record, dict) else None
+        if value is None or not str(value).strip():
+            skipped.append({"label": label, "value": "—", "reason": "not provided"})
+            continue
+        hit = shares.get((column, str(value).strip()))
+        if hit is None:
+            skipped.append({
+                "label": label,
+                "value": str(value),
+                "reason": "category absent from dataset or n < 30",
+            })
+            continue
+        n, share = hit
+        used.append({
+            "label": label,
+            "value": str(value),
+            "n": n,
+            "severe_share_pct": round(share * 100.0, 1),
+            "share": share,
+        })
+    if used:
+        return sum(item["share"] for item in used) / len(used), used, skipped, False
+    return baseline, used, skipped, True
+
+
+def model_severe_probability(record, probabilities=None):
+    """Model-evidence component: P(Serious Injury) + P(Fatal injury) (0..1).
+
+    ``probabilities`` may carry the class probabilities already computed by
+    ``prediction_service.make_prediction`` (list of ``{"label", "pct"}`` as
+    percentages); otherwise the model is called for ``record``.
+
+    Raises :class:`ValueError` for missing/malformed inputs and
+    :class:`RuntimeError` when the model artifacts are unavailable.
+    """
+    if probabilities is None:
+        if not isinstance(record, dict) or not record:
+            raise ValueError(
+                "A valid accident record is required to compute the "
+                "composite risk score."
+            )
+        probabilities = make_prediction(record)["probabilities"]
+
+    if not isinstance(probabilities, (list, tuple)) or not probabilities:
+        raise ValueError("Class probabilities are missing or malformed.")
+
+    total = 0.0
+    matched = False
+    for item in probabilities:
+        try:
+            label = item["label"]
+            pct = float(item["pct"])
+        except (TypeError, KeyError, IndexError, ValueError):
+            raise ValueError("Class probabilities are missing or malformed.")
+        if label in SCORE_SEVERE_LABELS:
+            matched = True
+            total += pct
+    if not matched:
+        raise ValueError("Class probabilities do not include the severity classes.")
+    p_severe = total / 100.0
+    if not 0.0 <= p_severe <= 1.0:
+        raise ValueError("Class probabilities are out of range (0-100 expected).")
+    return p_severe
+
+
+def composite_risk_score(record, probabilities=None):
+    """Deterministic composite risk score for one validated accident record.
+
+    Implements the documented formula::
+
+        score = 100 x (0.6 x p_severe + 0.4 x f_severe)
+
+    * ``p_severe`` - saved XGBoost model P(Serious + Fatal) for the record
+      (model evidence; pass ``probabilities`` to reuse an existing scoring);
+    * ``f_severe`` - observed serious/fatal share of the record's factor
+      categories in the real dataset (dataset evidence).
+
+    Range 0-100 (1 decimal); bands: Low < 25, Moderate 25-49.9,
+    High 50-74.9, Severe >= 75.  The returned dict exposes the score, band,
+    both weighted components (which sum exactly to the score) and the factor
+    details so the UI can show every input.
+
+    Raises :class:`ValueError` for invalid inputs and :class:`RuntimeError`
+    when the model artifacts are unavailable - callers degrade gracefully.
+    """
+    if not isinstance(record, dict):
+        raise ValueError(
+            "A valid accident record (dict) is required to compute the "
+            "composite risk score."
+        )
+
+    p_severe = model_severe_probability(record, probabilities)
+    f_severe, used, skipped, baseline_used = factor_severe_share(record)
+
+    model_points = round(100.0 * SCORE_MODEL_WEIGHT * p_severe, 1)
+    factor_points = round(100.0 * SCORE_FACTOR_WEIGHT * f_severe, 1)
+    score = round(model_points + factor_points, 1)
+    score = min(max(score, 0.0), 100.0)
+
+    return {
+        "score": score,
+        "band": score_band(score),
+        "formula": SCORE_FORMULA,
+        "model": {
+            "p_severe": round(p_severe, 4),
+            "weight": SCORE_MODEL_WEIGHT,
+            "points": model_points,
+        },
+        "factors": {
+            "f_severe": round(f_severe, 4),
+            "weight": SCORE_FACTOR_WEIGHT,
+            "points": factor_points,
+            "used": used,
+            "skipped": skipped,
+            "baseline_used": baseline_used,
+        },
+    }
 
 
 def _factor_separation(df):

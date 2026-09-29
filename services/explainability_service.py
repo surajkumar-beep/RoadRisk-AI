@@ -242,6 +242,66 @@ def explainability_mode():
     return _explainer_mode
 
 
+def top_factors(record, k=5):
+    """Top-k signed SHAP factors for this record's predicted class.
+
+    This is the SAME explanation pipeline the Explainability page uses
+    (:func:`explain_record` -> ``shap_values`` on the saved XGBoost booster);
+    only the presentation is trimmed so the prediction result page can show
+    3-5 factors inline.
+
+    Returns::
+
+        {
+          "factors": [{"label", "contribution", "direction", "magnitude_pct"}],
+          "class_label": predicted severity label,
+          "base_value": calibrated base log-odds for that class,
+          "output_logit": base + sum(shap),
+          "k": requested number of factors,
+          "mode": explainer mode ("native" / "sanitised"),
+        }
+
+    ``contribution`` is in log-odds space (same units as the Explainability
+    waterfall); ``direction`` is ``"up"`` (pushes towards the predicted
+    class) or ``"down"``.  Raises the same exceptions as
+    :func:`explain_record` so callers can degrade gracefully instead of
+    returning HTTP 500.
+    """
+    if not isinstance(k, int) or k < 1:
+        raise ValueError("k must be a positive integer.")
+    explanation = explain_record(record)
+
+    # increasing: positive contributions (desc); decreasing: negative (asc).
+    pool = {}
+    for factor in explanation["increasing"] + explanation["decreasing"]:
+        pool[factor["label"]] = factor
+    ranked = sorted(
+        pool.values(), key=lambda f: abs(f["contribution"]), reverse=True
+    )[:k]
+
+    max_abs = max((abs(f["contribution"]) for f in ranked), default=0.0)
+    factors = []
+    for factor in ranked:
+        magnitude = abs(factor["contribution"])
+        factors.append({
+            "label": factor["label"],
+            "contribution": factor["contribution"],
+            "direction": "up" if factor["contribution"] > 0 else "down",
+            "magnitude_pct": (
+                round(100.0 * magnitude / max_abs, 1) if max_abs else 0.0
+            ),
+        })
+
+    return {
+        "factors": factors,
+        "class_label": explanation["prediction"],
+        "base_value": explanation["base_value"],
+        "output_logit": explanation["output_logit"],
+        "k": k,
+        "mode": _explainer_mode,
+    }
+
+
 def _normalize_shap_values(raw):
     """Return an ndarray standing for (n_samples, n_features, n_classes)."""
     arr = np.asarray(raw, dtype=float)

@@ -1,0 +1,14 @@
+# Build context exclusions for the RoadRisk AI image.
+.git
+.github
+.venv
+venv
+__pycache__
+*.pyc
+.pytest_cache
+.env
+*.db
+.vscode
+.ipynb_checkpoints
+notebooks/.ipynb_checkpoints
+reports

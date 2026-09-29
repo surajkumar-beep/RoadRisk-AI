@@ -1,7 +1,7 @@
 """
 RoadRisk AI - Flask application factory.
 
-Covers STEP 7 (prediction), STEP 8 (session authentication), STEP 9
+Covers STEP 7 (prediction), STEP 8 (session authentication + RBAC), STEP 9
 (dashboard), STEP 10 (analytics), STEP 11 (risk analysis), STEP 12 (hotspot
 mapping) and STEP 13 (SHAP explainability) behind one process.
 
@@ -15,15 +15,23 @@ Contract (kept from the original STEP 7 deployment):
   * missing/corrupt artifacts never crash the app - pages show a friendly
     maintenance notice instead;
   * every analytical page (dashboard, analytics, risk, hotspots, XAI) is
-    behind the session-auth ``login_required`` guard.
+    behind the session-auth ``login_required`` guard; admin-only pages are
+    additionally guarded by ``admin_required`` (RBAC).
+
+Configuration comes from config.py (python-dotenv + environment variables);
+there is no hardcoded SECRET_KEY fallback - production refuses to boot
+without one.
 
 Run:  python app.py            (http://127.0.0.1:5000)
+Prod: gunicorn -c gunicorn.conf.py wsgi:app
 """
 import os
 
 from flask import Flask
 
+from config import load_config
 from routes import register_blueprints
+from services.auth import promote_admins
 from services.database import init_db
 from services.prediction_service import initialize as init_prediction_service
 
@@ -45,16 +53,16 @@ def _ensure_plotly_vendor():
 def create_app(test_config=None):
     """Build and configure the application (also used by tests)."""
     app = Flask(__name__)
-    app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "roadrisk_ai_secret_key")
-    app.config["SESSION_COOKIE_HTTPONLY"] = True
-    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-    app.config["PERMANENT_SESSION_LIFETIME"] = 60 * 60 * 8  # 8h
+    # Environment-driven config (SECRET_KEY from env/.env; no weak fallback).
+    app.config.from_object(load_config())
 
     if test_config:
         app.config.update(test_config)
 
     # Persistence + model artifacts (idempotent, only startup costs).
     init_db()
+    # RBAC: promote accounts listed in ROADRISK_ADMIN_EMAILS (no-op if unset).
+    promote_admins()
     init_prediction_service()
     _ensure_plotly_vendor()
 
@@ -68,6 +76,16 @@ def create_app(test_config=None):
             "<p>The page you are looking for does not exist.</p>"
             '<p><a href="/">Back to the prediction form</a></p>',
             404,
+        )
+
+    @app.errorhandler(403)
+    def forbidden(error):  # noqa: ANN001
+        return (
+            "<h1>403 - Admins only</h1>"
+            "<p>You are signed in, but your account does not have the admin "
+            "role required for this page.</p>"
+            '<p><a href="/home">Back to the dashboard</a></p>',
+            403,
         )
 
     @app.errorhandler(500)

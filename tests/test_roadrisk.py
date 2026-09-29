@@ -308,7 +308,10 @@ class TestAnalyticsServices(RoadRiskBase):
         from services.risk_service import SCOPES, build_risk_overview, severity_by_factor
 
         data = build_risk_overview("all")
-        self.assertEqual(data["formal"]["status"], "pending")
+        # The composite risk score is now defined (documented formula), not pending.
+        self.assertEqual(data["formal"]["status"], "defined")
+        self.assertIn("0.6", data["formal"]["formula"])
+        self.assertIn("f_severe", data["formal"]["formula"])
         self.assertGreaterEqual(len(data["factor_table"]), 5)
         self.assertGreater(len(data["top_combos"]), 0)
         self.assertIsNotNone(data["importance_chart_html"])
@@ -492,6 +495,417 @@ class TestExplainability(RoadRiskBase):
         self.assertNotIn("Why did the model decide?", body)
         # The Explainability page itself is still reachable from the sidebar.
         self.assertIn("Explainability", body)
+
+
+# ===========================================================================
+# 11. RBAC (roles, admin guard, migration, env promotion)
+# ===========================================================================
+class TestRBAC(RoadRiskBase):
+    def test_role_column_exists_with_user_default(self):
+        from services.database import get_connection
+
+        conn = get_connection()
+        try:
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+        finally:
+            conn.close()
+        self.assertIn("role", cols)
+
+    def test_registration_always_creates_user_role(self):
+        from services.database import run_query
+
+        self.register(email="rbac1@example.com")
+        rows = run_query("SELECT role FROM users WHERE email = ?",
+                         ("rbac1@example.com",))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["role"], "user")
+
+    def test_registration_cannot_grant_admin_via_input(self):
+        from services.database import run_query
+
+        # Even if a rogue "role" field is posted, it is ignored by the server.
+        self.client.post(
+            "/register",
+            data={
+                "name": "Rogue", "email": "rbac2@example.com",
+                "password": "secret123", "confirm_password": "secret123",
+                "role": "admin",  # not read by register_user
+            },
+        )
+        rows = run_query("SELECT role FROM users WHERE email = ?",
+                         ("rbac2@example.com",))
+        self.assertEqual(rows[0]["role"], "user")
+
+    def test_admin_page_requires_login(self):
+        resp = self.client.get("/admin", follow_redirects=False)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("/login", resp.headers["Location"])
+
+    def test_admin_page_forbidden_for_regular_user(self):
+        self.register(email="rbac3@example.com")
+        resp = self.client.get("/admin")
+        self.assertEqual(resp.status_code, 403)
+        self.assertIn("Admins only", resp.get_data(as_text=True))
+
+    def test_admin_page_allowed_and_lists_users(self):
+        from services.database import run_write
+
+        self.register(email="rbac4@example.com", name="Boss Admin")
+        run_write("UPDATE users SET role = 'admin' WHERE email = ?",
+                  ("rbac4@example.com",))
+        resp = self.client.get("/admin")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        self.assertIn("Registered accounts", body)
+        self.assertIn("rbac4@example.com", body)
+        self.assertIn("Boss Admin", body)
+
+    def test_admin_nav_link_only_visible_to_admins(self):
+        from services.database import run_write
+
+        self.register(email="rbac5@example.com")
+        user_body = self.client.get("/home").get_data(as_text=True)
+        self.assertNotIn('href="/admin"', user_body)
+
+        run_write("UPDATE users SET role = 'admin' WHERE email = ?",
+                  ("rbac5@example.com",))
+        admin_body = self.client.get("/home").get_data(as_text=True)
+        self.assertIn('href="/admin"', admin_body)
+
+    def test_promote_admins_from_environment(self):
+        import os
+        from unittest import mock
+
+        from services import auth as auth_mod
+        from services.database import run_query
+
+        email = "rbac6@example.com"
+        self.register(email=email)
+        with mock.patch.dict(os.environ,
+                             {"ROADRISK_ADMIN_EMAILS": " RBAC6@Example.com "}):
+            promoted = auth_mod.promote_admins()
+        self.assertIn(email, promoted)
+        rows = run_query("SELECT role FROM users WHERE email = ?", (email,))
+        self.assertEqual(rows[0]["role"], "admin")
+        # Idempotent: a second run promotes nothing.
+        with mock.patch.dict(os.environ, {"ROADRISK_ADMIN_EMAILS": email}):
+            self.assertEqual(auth_mod.promote_admins(), [])
+
+    def test_legacy_database_gains_role_column_without_data_loss(self):
+        """Pre-RBAC databases migrate in place; existing users survive."""
+        import sqlite3
+
+        from services.database import _migrate
+
+        legacy_path = os.path.join(tempfile.gettempdir(), "roadrisk_legacy.db")
+        if os.path.exists(legacy_path):
+            os.remove(legacy_path)
+        conn = sqlite3.connect(legacy_path)
+        try:
+            conn.execute(
+                "CREATE TABLE users ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,"
+                " password_hash TEXT NOT NULL, created_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO users (name, email, password_hash, created_at)"
+                " VALUES ('Legacy User', 'legacy@example.com', 'hash', '2024')"
+            )
+            conn.commit()
+
+            _migrate(conn)   # applies ALTER TABLE ... ADD COLUMN role
+            _migrate(conn)   # idempotent
+            row = conn.execute(
+                "SELECT email, role FROM users WHERE email = ?",
+                ("legacy@example.com",),
+            ).fetchone()
+            self.assertEqual(row[0], "legacy@example.com")
+            self.assertEqual(row[1], "user")
+        finally:
+            conn.close()
+            if os.path.exists(legacy_path):
+                os.remove(legacy_path)
+
+
+# ===========================================================================
+# 12. Prediction result: SHAP top factors + composite risk score
+# ===========================================================================
+class TestPredictionResultEnrichment(RoadRiskBase):
+    def test_prediction_result_shows_top_shap_factors_and_risk_score(self):
+        self.register(email="enrich1@example.com")
+        resp = self.client.post("/predict", data=ps.sample_record(seed=7))
+        self.assertEqual(resp.status_code, 200)
+        body = resp.get_data(as_text=True)
+        # SHAP factors section with 3-5 factor rows.
+        self.assertIn("Top contributing factors (SHAP)", body)
+        self.assertIn("Composite risk score", body)
+        self.assertIn("transparent index (0-100)", body)
+        section = body.split("Top contributing factors (SHAP)", 1)[1]
+        section = section.split("result-note", 1)[0]
+        self.assertGreaterEqual(section.count("prob-bar"), 3)
+        self.assertLessEqual(section.count("prob-bar"), 5)
+
+    def test_top_factors_use_real_shap_pipeline(self):
+        from services.explainability_service import top_factors
+
+        record = self.valid_record(seed=11)
+        out = top_factors(record, k=4)
+        self.assertEqual(len(out["factors"]), 4)
+        self.assertIn(out["class_label"],
+                      {"Slight Injury", "Serious Injury", "Fatal injury"})
+        # Signed contributions, ranked by magnitude, bar widths normalised.
+        mags = [abs(f["contribution"]) for f in out["factors"]]
+        self.assertEqual(mags, sorted(mags, reverse=True))
+        for factor in out["factors"]:
+            self.assertIn(factor["direction"], ("up", "down"))
+            self.assertTrue(0.0 <= factor["magnitude_pct"] <= 100.0)
+
+    def test_result_degrades_gracefully_when_both_services_fail(self):
+        from unittest import mock
+
+        self.register(email="enrich2@example.com")
+        with mock.patch(
+            "services.explainability_service.top_factors",
+            side_effect=ValueError("boom"),
+        ), mock.patch(
+            "services.risk_service.composite_risk_score",
+            side_effect=ValueError("boom"),
+        ):
+            resp = self.client.post("/predict", data=ps.sample_record(seed=9))
+        self.assertEqual(resp.status_code, 200)  # never a 500
+        body = resp.get_data(as_text=True)
+        self.assertIn("Top factors unavailable", body)
+        self.assertIn("Risk score unavailable", body)
+        # The prediction itself still rendered.
+        self.assertIn("Class probabilities", body)
+
+    def test_shap_failure_keeps_risk_score_when_only_shap_fails(self):
+        from unittest import mock
+
+        self.register(email="enrich3@example.com")
+        with mock.patch(
+            "services.explainability_service.top_factors",
+            side_effect=ValueError("boom"),
+        ):
+            resp = self.client.post("/predict", data=ps.sample_record(seed=9))
+        body = resp.get_data(as_text=True)
+        self.assertIn("Top factors unavailable", body)
+        self.assertIn("Composite risk score", body)
+
+
+# ===========================================================================
+# 13. Composite risk score (normal / boundary / missing-invalid inputs)
+# ===========================================================================
+class TestCompositeRiskScore(RoadRiskBase):
+    def test_normal_score_is_reproducible_and_well_formed(self):
+        from services import risk_service as rs
+
+        record = self.valid_record(seed=3)
+        first = rs.composite_risk_score(record)
+        second = rs.composite_risk_score(record)
+
+        self.assertEqual(first, second)  # deterministic for identical inputs
+        self.assertTrue(0.0 <= first["score"] <= 100.0)
+        # Components sum exactly to the displayed score.
+        self.assertAlmostEqual(
+            first["model"]["points"] + first["factors"]["points"],
+            first["score"], places=1,
+        )
+        # Inputs are real: model probability in [0,1], dataset factors present.
+        self.assertTrue(0.0 <= first["model"]["p_severe"] <= 1.0)
+        self.assertTrue(0.0 <= first["factors"]["f_severe"] <= 1.0)
+        self.assertGreater(len(first["factors"]["used"]), 0)
+        # Band matches the documented thresholds.
+        self.assertEqual(first["band"], rs.score_band(first["score"]))
+        # Distinct quantities: the score is not just the model probability.
+        self.assertNotEqual(first["score"], first["model"]["p_severe"])
+
+    def test_boundary_scores_and_bands(self):
+        from unittest import mock
+
+        from services import risk_service as rs
+
+        record = self.valid_record(seed=4)
+        # All-zero inputs -> exactly 0.0 / Low.
+        with mock.patch.object(rs, "model_severe_probability", return_value=0.0), \
+                mock.patch.object(rs, "factor_severe_share",
+                                  return_value=(0.0, [], [], True)):
+            zero = rs.composite_risk_score(record)
+        self.assertEqual(zero["score"], 0.0)
+        self.assertEqual(zero["band"], "Low")
+
+        # All-one inputs -> exactly 100.0 / Severe.
+        with mock.patch.object(rs, "model_severe_probability", return_value=1.0), \
+                mock.patch.object(rs, "factor_severe_share",
+                                  return_value=(1.0, [], [], True)):
+            full = rs.composite_risk_score(record)
+        self.assertEqual(full["score"], 100.0)
+        self.assertEqual(full["band"], "Severe")
+
+        # Exact documented band thresholds.
+        self.assertEqual(rs.score_band(24.9), "Low")
+        self.assertEqual(rs.score_band(25.0), "Moderate")
+        self.assertEqual(rs.score_band(49.9), "Moderate")
+        self.assertEqual(rs.score_band(50.0), "High")
+        self.assertEqual(rs.score_band(74.9), "High")
+        self.assertEqual(rs.score_band(75.0), "Severe")
+
+        # Midpoint: p=f=0.5 -> 0.6*50 + 0.4*50 = 50.0 (High).
+        with mock.patch.object(rs, "model_severe_probability", return_value=0.5), \
+                mock.patch.object(rs, "factor_severe_share",
+                                  return_value=(0.5, [], [], True)):
+            mid = rs.composite_risk_score(record)
+        self.assertEqual(mid["score"], 50.0)
+        self.assertEqual(mid["band"], "High")
+
+    def test_missing_and_invalid_inputs_raise_value_error(self):
+        from services import risk_service as rs
+
+        record = self.valid_record(seed=5)
+        for bad in (None, "not-a-record", 42, [], ("x",)):
+            with self.assertRaises(ValueError):
+                rs.composite_risk_score(bad)
+        # Empty record without probabilities cannot be scored.
+        with self.assertRaises(ValueError):
+            rs.composite_risk_score({})
+        # Malformed / non-severity probability payloads are rejected.
+        with self.assertRaises(ValueError):
+            rs.composite_risk_score({}, probabilities=[])
+        with self.assertRaises(ValueError):
+            rs.composite_risk_score({}, probabilities=[{"label": "Odd", "pct": 50}])
+        with self.assertRaises(ValueError):
+            rs.composite_risk_score({}, probabilities=[{"pct": 10}])
+        with self.assertRaises(ValueError):
+            rs.composite_risk_score(
+                {}, probabilities=[{"label": "Fatal injury", "pct": 150}]
+            )
+
+    def test_missing_factor_fields_degrade_to_baseline(self):
+        from services import risk_service as rs
+
+        # Record without any factor columns -> documented baseline fallback.
+        out = rs.composite_risk_score(
+            {}, probabilities=[
+                {"label": "Slight Injury", "pct": 50.0},
+                {"label": "Serious Injury", "pct": 30.0},
+                {"label": "Fatal injury", "pct": 20.0},
+            ]
+        )
+        self.assertTrue(out["factors"]["baseline_used"])
+        self.assertEqual(out["factors"]["used"], [])
+        self.assertAlmostEqual(out["model"]["p_severe"], 0.5, places=6)
+
+    def test_risk_page_shows_score_after_prediction(self):
+        self.register(email="score1@example.com")
+        self.client.post("/predict", data=ps.sample_record(seed=6))
+        body = self.client.get("/risk").get_data(as_text=True)
+        self.assertIn("Composite score (0-100)", body)
+        self.assertIn("Component factors", body)
+        self.assertIn("Model component (60%)", body)
+
+    def test_risk_page_prompts_before_any_prediction(self):
+        self.register(email="score2@example.com")
+        body = self.client.get("/risk").get_data(as_text=True)
+        self.assertIn("No prediction yet", body)
+        self.assertNotIn("Composite score (0-100)", body)
+
+
+# ===========================================================================
+# 14. Hotspot spatial-proxy filters
+# ===========================================================================
+class TestHotspotFilters(RoadRiskBase):
+    def test_default_page_labels_spatial_proxy(self):
+        self.register(email="hot1@example.com")
+        body = self.client.get("/hotspots").get_data(as_text=True)
+        self.assertIn("area-based spatial proxy", body)
+        self.assertIn("not a geographic GPS heatmap", body)
+
+    def test_day_filter_is_applied(self):
+        self.register(email="hot2@example.com")
+        body = self.client.get("/hotspots?day=Friday").get_data(as_text=True)
+        self.assertIn("Friday", body)
+        self.assertIn("Accidents in view", body)
+
+    def test_top_filter_limits_ranked_cards(self):
+        self.register(email="hot3@example.com")
+        body = self.client.get("/hotspots?top=5").get_data(as_text=True)
+        self.assertEqual(body.count('class="rank-badge"'), 5)
+
+    def test_severity_filter_shows_filtered_cards_and_hides_mix(self):
+        self.register(email="hot4@example.com")
+        body = self.client.get(
+            "/hotspots?severity=Fatal+injury"
+        ).get_data(as_text=True)
+        self.assertIn("Filtered to <strong>Fatal injury</strong>", body)
+        self.assertIn("Severity-mix chart hidden", body)
+
+    def test_invalid_filter_values_are_ignored(self):
+        self.register(email="hot5@example.com")
+        body = self.client.get(
+            "/hotspots?day=Funday&severity=Bogus&top=999"
+        ).get_data(as_text=True)
+        self.assertEqual(body.count('class="rank-badge"'), 10)  # default top 10
+        self.assertIn("All records", body)  # no valid filter applied
+        self.assertEqual(body.count("Severity-mix chart hidden"), 0)
+
+    def test_service_validates_filters_against_dataset(self):
+        from services.hotspot_service import build_hotspots
+
+        clean = build_hotspots({"day": "Friday", "severity": "Fatal injury",
+                                "top": "5"})
+        self.assertEqual(clean["applied"],
+                         {"day": "Friday", "severity": "Fatal injury", "top": 5})
+        bogus = build_hotspots({"day": "Funday", "severity": "Nope", "top": "x"})
+        self.assertEqual(bogus["applied"],
+                         {"day": "", "severity": "", "top": 10})
+        self.assertFalse(clean["empty"])
+
+
+# ===========================================================================
+# 15. Configuration (no weak SECRET_KEY fallback)
+# ===========================================================================
+class TestConfiguration(RoadRiskBase):
+    def test_app_secret_key_is_not_the_weak_hardcoded_default(self):
+        self.assertTrue(_app.secret_key)
+        self.assertNotEqual(_app.secret_key, "roadrisk_ai_secret_key")
+        self.assertGreaterEqual(len(_app.secret_key), 32)
+
+    def test_dev_profile_generates_ephemeral_key_when_unset(self):
+        import os
+        from unittest import mock
+
+        from config import load_config
+
+        with mock.patch.dict(os.environ, {"ROADRISK_ENV": "development",
+                                          "SECRET_KEY": ""}, clear=False):
+            cfg = load_config()
+        self.assertTrue(cfg.SECRET_KEY)
+        self.assertNotEqual(cfg.SECRET_KEY, "roadrisk_ai_secret_key")
+
+    def test_production_profile_refuses_missing_secret_key(self):
+        import os
+        from unittest import mock
+
+        from config import load_config
+
+        with mock.patch.dict(os.environ, {"ROADRISK_ENV": "production",
+                                          "SECRET_KEY": ""}, clear=False):
+            with self.assertRaises(RuntimeError):
+                load_config()
+
+    def test_production_profile_uses_env_secret_key(self):
+        import os
+        from unittest import mock
+
+        from config import load_config
+
+        with mock.patch.dict(os.environ, {"ROADRISK_ENV": "production",
+                                          "SECRET_KEY": "prod-key-123"},
+                             clear=False):
+            cfg = load_config()
+        self.assertEqual(cfg.SECRET_KEY, "prod-key-123")
+        self.assertFalse(cfg.DEBUG)
 
 
 if __name__ == "__main__":

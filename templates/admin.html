@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Administration · RoadRisk AI{% endblock %}
+
+{% block page_title %}Administration{% endblock %}
+{% block page_subtitle %}
+Registered accounts and their roles (RBAC). New registrations always receive the <strong>user</strong> role; admins are granted through the <code>ROADRISK_ADMIN_EMAILS</code> environment variable.
+{% endblock %}
+
+{% block content %}
+<div class="kpi-grid">
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">▤</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ total }}</strong>
+      <span>Total accounts</span>
+      <small>in the users table</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">▲</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ admin_count }}</strong>
+      <span>Administrators</span>
+      <small>admin role</small>
+    </div>
+  </div>
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">◆</div>
+    <div class="kpi-meta">
+      <strong data-countup>{{ user_count }}</strong>
+      <span>Regular users</span>
+      <small>user role (default)</small>
+    </div>
+  </div>
+</div>
+
+<div class="card reveal">
+  <div class="card-title"><h3>Registered accounts</h3></div>
+  <p class="card-sub">Read-only list; roles are managed via the <code>ROADRISK_ADMIN_EMAILS</code> environment variable and applied at startup.</p>
+  {% if users %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead>
+        <tr><th>#</th><th>Name</th><th>Email</th><th>Role</th><th>Joined</th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td style="white-space:normal;"><strong>{{ u.name }}</strong></td>
+          <td style="white-space:normal;">{{ u.email }}</td>
+          <td><span class="pill {{ 'red' if u.role == 'admin' else 'muted' }}">{{ u.role }}</span></td>
+          <td>{{ u.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-chart"><span class="empty-icon" aria-hidden="true">👥</span>
+  <p>No accounts yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

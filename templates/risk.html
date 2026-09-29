@@ -3,13 +3,98 @@
 
 {% block page_title %}Risk analysis{% endblock %}
 {% block page_subtitle %}
-Descriptive risk statistics from the real dataset + model-derived feature importance. All calculations are documented below; no composite score is invented.
+Descriptive risk statistics from the real dataset, the composite risk score for your latest prediction, and model-derived feature importance. Every calculation is documented below.
 {% endblock %}
 
 {% block content %}
-<div class="alert alert-info">
-  <strong>{{ data.formal.title }}:</strong>
-  <span>{{ data.formal.explanation }}</span>
+{# ---- Composite risk score (documented formula, real inputs) ---- #}
+<div class="section-label">Composite risk score</div>
+<div class="card reveal">
+  <div class="card-title"><h3>{{ data.formal.title }}</h3></div>
+  <p class="card-sub"><code>{{ data.formal.formula }}</code> — {{ data.formal.explanation }}</p>
+
+  {% if score %}
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-ico {{ 'red' if score.band in ('Severe', 'High') else ('amber' if score.band == 'Moderate' else '') }}" aria-hidden="true">⚠</div>
+      <div class="kpi-meta">
+        <strong data-countup>{{ score.score }}</strong>
+        <span>Composite score (0-100)</span>
+        <small>interpretation band: {{ score.band }}</small>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-ico amber" aria-hidden="true">◈</div>
+      <div class="kpi-meta">
+        <strong>{{ score.model.points }} pts</strong>
+        <span>Model component (60%)</span>
+        <small>p_severe = {{ score.model.p_severe }} — P(Serious + Fatal)</small>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-ico" aria-hidden="true">▤</div>
+      <div class="kpi-meta">
+        <strong>{{ score.factors.points }} pts</strong>
+        <span>Dataset factor component (40%)</span>
+        <small>f_severe = {{ score.factors.f_severe }} across {{ score.factors.used | length }} factor(s)</small>
+      </div>
+    </div>
+  </div>
+
+  <div class="prob-bar">
+    <span class="p-label">Model (60%)</span>
+    <div class="prob-track"><div class="prob-fill" data-width="{{ score.model.points }}" style="background: var(--sev-serious);"></div></div>
+    <span class="prob-pct">{{ score.model.points }} pts</span>
+  </div>
+  <div class="prob-bar">
+    <span class="p-label">Dataset factors (40%)</span>
+    <div class="prob-track"><div class="prob-fill" data-width="{{ score.factors.points }}" style="background: var(--sev-slight);"></div></div>
+    <span class="prob-pct">{{ score.factors.points }} pts</span>
+  </div>
+  <p class="hint-note">Components sum exactly to the score. Score computed for your most recent prediction (session).</p>
+
+  <div class="section-label tight">Component factors (dataset evidence)</div>
+  {% if score.factors.used %}
+  <div class="table-wrap">
+    <table class="data" style="min-width:420px;">
+      <thead><tr><th>Factor</th><th>Category in your record</th><th>Records (n)</th><th>Observed serious/fatal share</th></tr></thead>
+      <tbody>
+        {% for f in score.factors.used %}
+        <tr>
+          <td>{{ f.label }}</td>
+          <td><strong>{{ f.value }}</strong></td>
+          <td>{{ f.n }}</td>
+          <td><span class="pill {{ 'red' if f.severe_share_pct > 50 else 'amber' }}">{{ f.severe_share_pct }}%</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if score.factors.baseline_used %}
+  <p class="hint-note">No factor category qualified (n ≥ 30 required) — the full-dataset severe share ({{ score.factors.f_severe }}) was used as the documented baseline.</p>
+  {% endif %}
+  {% else %}
+  <p class="hint-note">No factor category contributed; the full-dataset severe share baseline was used.</p>
+  {% endif %}
+  {% if score.factors.skipped %}
+  <p class="hint-note">Skipped factors: {% for s in score.factors.skipped %}{{ s.label }} ({{ s.reason }}){{ ", " if not loop.last }}{% endfor %}.</p>
+  {% endif %}
+  <p class="result-note">
+    The score is a transparent index, <strong>not</strong> a probability. The three
+    model-derived quantities stay distinct: class probabilities (prediction page),
+    this composite score, and SHAP attribution / gain importance (what drove the model).
+  </p>
+  {% elif score_error %}
+  <div class="alert alert-warn"><strong>Score unavailable.</strong><span>{{ score_error }}</span></div>
+  {% else %}
+  <div class="note-box muted">
+    <span aria-hidden="true">✦</span>
+    <div><strong>No prediction yet.</strong> Submit a record on the
+    <a href="{{ url_for('predict.predict') }}">Prediction</a> page first — the
+    composite score is then computed for that record automatically (also shown
+    directly on the prediction result).</div>
+  </div>
+  {% endif %}
 </div>
 
 {# ---- Control panel ---- #}

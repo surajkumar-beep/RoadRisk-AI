@@ -40,6 +40,69 @@ The trained RoadRisk AI model (XGBoost, 30 approved input features) predicts whe
   </div>
   {% endfor %}
 
+  {# ---- Top SHAP factors (same pipeline as the Explainability page) ---- #}
+  {% if result.top_factors %}
+  <div class="section-label tight">Top contributing factors (SHAP)</div>
+  {% for f in result.top_factors.factors %}
+  <div class="prob-bar">
+    <span class="p-label" title="{{ f.label }}">{{ f.label }}</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ f.magnitude_pct }}"
+           style="background: {% if f.direction == 'up' %}var(--sev-{{ result.prediction_tone }}){% else %}#B0B7C0{% endif %};"></div>
+    </div>
+    <span class="prob-pct">{{ "%+.3f"|format(f.contribution) }}</span>
+  </div>
+  {% endfor %}
+  <p class="result-note">
+    Log-odds contributions from the saved XGBoost model (SHAP TreeExplainer,
+    {{ result.top_factors.mode }} explainer) for the predicted class — the same
+    values shown on the <a href="{{ url_for('xai.explain') }}">Explainability</a>
+    page. Coloured bars push <em>towards</em> the predicted class, grey bars push
+    away. These are <strong>SHAP attributions</strong> — not class probabilities
+    and not the composite risk score.
+  </p>
+  {% elif result.top_factors_error %}
+  <div class="alert alert-warn">
+    <strong>Top factors unavailable.</strong><span>{{ result.top_factors_error }}</span>
+  </div>
+  {% endif %}
+
+  {# ---- Composite risk score (documented formula, full view on /risk) ---- #}
+  {% if result.risk %}
+  <div class="section-label tight">Composite risk score</div>
+  <div class="prob-bar">
+    <span class="p-label">Overall (0-100)</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ result.risk.score }}"
+           style="background: {% if result.risk.band in ('Severe', 'High') %}var(--sev-fatal){% elif result.risk.band == 'Moderate' %}var(--sev-serious){% else %}var(--sev-slight){% endif %};"></div>
+    </div>
+    <span class="prob-pct">{{ result.risk.score }} · {{ result.risk.band }}</span>
+  </div>
+  <div class="prob-bar">
+    <span class="p-label">Model 60%</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ result.risk.model.points }}" style="background: var(--sev-serious);"></div>
+    </div>
+    <span class="prob-pct">{{ result.risk.model.points }} pts</span>
+  </div>
+  <div class="prob-bar">
+    <span class="p-label">Dataset factors 40%</span>
+    <div class="prob-track">
+      <div class="prob-fill" data-width="{{ result.risk.factors.points }}" style="background: var(--sev-slight);"></div>
+    </div>
+    <span class="prob-pct">{{ result.risk.factors.points }} pts</span>
+  </div>
+  <p class="result-note">
+    {{ result.risk.formula }} — a transparent index (0-100), <strong>not</strong> a
+    probability. Component factors and interpretation are on the
+    <a href="{{ url_for('risk.risk') }}">Risk Analysis</a> page.
+  </p>
+  {% elif result.risk_error %}
+  <div class="alert alert-warn">
+    <strong>Risk score unavailable.</strong><span>{{ result.risk_error }}</span>
+  </div>
+  {% endif %}
+
   <div class="result-actions">
     <a href="{{ url_for('xai.explain') }}" class="btn btn-primary btn-sm">Explain this record with SHAP →</a>
     <button type="button" class="btn btn-outline btn-sm"

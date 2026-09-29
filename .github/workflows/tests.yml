@@ -1,0 +1,32 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # models/*.pkl are intentionally gitignored (generated artifacts), so CI
+      # regenerates them with the same ML pipeline documented in the README.
+      # Hyperparameter search uses a reduced n_iter for CI runtime; the
+      # preprocessing step is deterministic (fixed seeds) and produces the
+      # scaler.pkl / label_encoders.pkl artifacts the app requires.
+      - name: Generate model artifacts (ML pipeline)
+        run: |
+          python preprocessing/preprocessing_pipeline.py
+          python -c "from training.train_model import run_training_pipeline; run_training_pipeline(tune_n_iter=3)"
+
+      - name: Run test suite
+        run: pytest tests/ -v

@@ -3,7 +3,7 @@
 
 {% block page_title %}Hotspot mapping{% endblock %}
 {% block page_subtitle %}
-Areas ranked by real accident volume. Coordinates are not part of this dataset, so area is the finest spatial grain available.
+Area-based spatial proxy: areas ranked by real accident volume (weekday / severity filters available). Coordinates are not part of this dataset, so area is the finest spatial grain available — this is not a geographic GPS heatmap.
 {% endblock %}
 
 {% block content %}
@@ -12,17 +12,60 @@ Areas ranked by real accident volume. Coordinates are not part of this dataset, 
   <div><strong>One honest limitation:</strong> {{ data.not_in_dataset }}</div>
 </div>
 
-<div class="kpi-grid">
-  <div class="kpi reveal">
-    <div class="kpi-ico">▤</div>
-    <div class="kpi-meta">
-      <strong>{{ "{:,}".format(data.total) }}</strong>
-      <span>Accidents mapped</span>
-      <small>full cleaned dataset</small>
+{# ---- Filters (validated against the dataset; invalid values are ignored) ---- #}
+<form method="get" action="{{ url_for('hotspot.hotspots') }}" class="card filter-bar" data-js-resize>
+  <div class="card-title">
+    <h3>Filters</h3>
+    <div class="filter-actions">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+      <a href="{{ url_for('hotspot.hotspots') }}" class="btn btn-outline btn-sm" data-js-resize>Reset</a>
     </div>
   </div>
+  <div class="fields filter-fields">
+    <div class="field">
+      <label for="f-day">Weekday</label>
+      <select id="f-day" name="day">
+        <option value="">All days</option>
+        {% for d in data.options.days %}
+        <option value="{{ d }}" {% if data.applied.day == d %}selected{% endif %}>{{ d }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Real temporal field (the dataset has no date column).</p>
+    </div>
+    <div class="field">
+      <label for="f-severity">Severity</label>
+      <select id="f-severity" name="severity">
+        <option value="">All severities</option>
+        {% for s in data.options.severities %}
+        <option value="{{ s }}" {% if data.applied.severity == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Counts and rankings use only the selected severity.</p>
+    </div>
+    <div class="field">
+      <label for="f-top">Ranked areas shown</label>
+      <select id="f-top" name="top">
+        {% for t in data.options.tops %}
+        <option value="{{ t }}" {% if data.applied.top == t %}selected{% endif %}>Top {{ t }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Applies to the ranked cards and area charts.</p>
+    </div>
+  </div>
+</form>
+
+<div class="kpi-grid">
   <div class="kpi reveal">
-    <div class="kpi-ico">⌖</div>
+    <div class="kpi-ico" aria-hidden="true">▤</div>
+    <div class="kpi-meta">
+      <strong>{{ "{:,}".format(data.total) }}</strong>
+      <span>Accidents in view</span>
+      <small>{{ data.applied_label }} · {{ "{:,}".format(data.total_full) }} total</small>
+    </div>
+  </div>
+  {% if data.area_cards %}
+  <div class="kpi reveal">
+    <div class="kpi-ico" aria-hidden="true">⌖</div>
     <div class="kpi-meta">
       <strong>{{ data.area_cards[0].name }}</strong>
       <span>Busiest area</span>
@@ -30,15 +73,16 @@ Areas ranked by real accident volume. Coordinates are not part of this dataset, 
     </div>
   </div>
   <div class="kpi reveal">
-    <div class="kpi-ico red">☠</div>
+    <div class="kpi-ico red" aria-hidden="true">☠</div>
     <div class="kpi-meta">
       <strong>{{ data.area_cards[0].fatal_pct }}%</strong>
       <span>Fatal share in busiest area</span>
-      <small>of that area's accidents</small>
+      <small>of that area's accidents (within filter)</small>
     </div>
   </div>
+  {% endif %}
   <div class="kpi reveal">
-    <div class="kpi-ico">◷</div>
+    <div class="kpi-ico" aria-hidden="true">◷</div>
     <div class="kpi-meta">
       <strong>{{ data.max_areas }}</strong>
       <span>Areas shown</span>
@@ -47,7 +91,16 @@ Areas ranked by real accident volume. Coordinates are not part of this dataset, 
   </div>
 </div>
 
-<div class="section-label">Top areas</div>
+{% if data.empty %}
+<div class="alert alert-warn">
+  <div class="empty-chart" style="border:0; padding:24px;">
+    <span class="empty-icon" aria-hidden="true">🔍</span>
+    <p>No records match the current filter combination. Try widening the filters or
+    <a href="{{ url_for('hotspot.hotspots') }}">resetting them</a>.</p>
+  </div>
+</div>
+{% else %}
+<div class="section-label">Ranked areas <span class="pill muted">area-based spatial proxy</span></div>
 <div class="grid">
   {% for area in data.area_cards %}
   <div class="card reveal" style="padding:16px;">
@@ -55,20 +108,33 @@ Areas ranked by real accident volume. Coordinates are not part of this dataset, 
       <span class="rank-badge">{{ area.rank }}</span>
       <div style="flex:1;">
         <strong style="font-size:15px;">{{ area.name }}</strong>
-        <div style="font-size:12.5px; color:var(--muted);">{{ area.count }} accidents · {{ area.share_pct }}% of total</div>
+        <div style="font-size:12.5px; color:var(--muted);">{{ area.count }} accidents · {{ area.share_pct }}% of view</div>
       </div>
       <span class="pill {{ 'red' if area.fatal_pct > 15 else 'amber' }}">↑ {{ area.serious_pct }}%</span>
     </div>
     <div style="display:flex; gap:8px; margin-top:12px; font-size:11.5px; color:var(--muted);">
+      {% if data.applied.severity %}
+      <span>Filtered to <strong>{{ data.applied.severity }}</strong></span>
+      {% else %}
       <span>Fatal <strong>{{ area.fatal_pct }}%</strong></span>
       <span>Serious <strong>{{ area.serious_pct }}%</strong></span>
       <span>Slight <strong>{{ area.sight_pct }}%</strong></span>
+      {% endif %}
     </div>
   </div>
   {% endfor %}
 </div>
 
-<div class="section-label">Density &amp; road geometry</div>
+{% if data.severity_mix_skipped %}
+<div class="note-box muted">
+  <span aria-hidden="true">▧</span>
+  <div><strong>Severity-mix chart hidden:</strong> the 100% stacked severity chart is
+  meaningless while a severity filter is active (every bar would be 100% the same
+  severity). Clear the severity filter to see it.</div>
+</div>
+{% endif %}
+
+<div class="section-label">Density &amp; road geometry <span class="pill muted">area-based spatial proxy</span></div>
 <div class="grid-12">
   {% for chart in data.charts %}
   <div class="card span-{{ chart.span }} reveal js-plotly">
@@ -78,4 +144,5 @@ Areas ranked by real accident volume. Coordinates are not part of this dataset, 
   </div>
   {% endfor %}
 </div>
+{% endif %}
 {% endblock %}
